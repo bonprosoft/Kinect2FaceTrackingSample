@@ -98,6 +98,5 @@ namespace FaceTrackingBasic.ViewModels
             PropertyChanged(this, new PropertyChangedEventArgs(propertyName));
         }
 
-
     }
 }

@@ -258,20 +258,31 @@ namespace FaceTrackingBasic.Models
         private void Initialize()
         {
             // Kinectセンサーを取得
-            kinect = KinectSensor.GetDefault();
+            this.kinect = KinectSensor.GetDefault();
 
-            if (kinect == null) return;
+            if (this.kinect == null) return;
 
             // Kinectセンサーの情報を取得
             var desc = kinect.ColorFrameSource.FrameDescription;
             // 各種描画用変数をセンサー情報をもとに初期化
-            colorPixels = new byte[desc.Width * desc.Height * bytePerPixel];
-            _ColorBitmap = new WriteableBitmap(desc.Width, desc.Height, 96.0, 96.0, PixelFormats.Bgr32, null);
-            _FacePointBitmap = new RenderTargetBitmap(desc.Width, desc.Height, 96.0, 96.0, PixelFormats.Default);
+            this.colorPixels = new byte[desc.Width * desc.Height * bytePerPixel];
+            this._ColorBitmap = new WriteableBitmap(desc.Width, desc.Height, 96.0, 96.0, PixelFormats.Bgr32, null);
+            this._FacePointBitmap = new RenderTargetBitmap(desc.Width, desc.Height, 96.0, 96.0, PixelFormats.Default);
 
             // KinectセンサーからBody(骨格情報)とColor(色情報)を取得するFrameReaderを作成
-            reader = kinect.OpenMultiSourceFrameReader(FrameSourceTypes.Body | FrameSourceTypes.Color);
-            reader.MultiSourceFrameArrived += OnMultiSourceFrameArrived;
+            this.reader = kinect.OpenMultiSourceFrameReader(FrameSourceTypes.Body | FrameSourceTypes.Color);
+            this.reader.MultiSourceFrameArrived += OnMultiSourceFrameArrived;
+
+            // FaceFrameSourceを作成
+            faceSource = new FaceFrameSource(kinect,0, DefaultFaceFrameFeatures);
+
+            // Readerを作成する
+            faceReader = faceSource.OpenReader();
+
+            // FaceReaderからフレームを受け取ることができるようになった際に発生するイベント
+            faceReader.FrameArrived += OnFaceFrameArrived;
+            // FaceFrameSourceが指定されたTrackingIdのトラッキングに失敗した際に発生するイベント
+            faceSource.TrackingIdLost += OnTrackingIdLost;
 
             // センサーの開始
             kinect.Open();
@@ -297,26 +308,14 @@ namespace FaceTrackingBasic.Models
                     bodyFrame.GetAndRefreshBodyData(bodies);
 
                     // FaceTrackingが開始されていないか確認
-                    if (faceSource == null)
+                    if (!this.faceSource.IsTrackingIdValid)
                     {
                         // トラッキング先の骨格を選択
                         var target = (from body in this.bodies where body.IsTracked select body).FirstOrDefault();
                         if (target != null)
                         {
-                             // 検出されたBodyに対するFaceFrameSourceを作成
-                            faceSource = new FaceFrameSource(kinect)
-                            {
-                                FaceFrameFeatures = DefaultFaceFrameFeatures,
-                                TrackingId = target.TrackingId
-                            };
-
-                            // Readerを作成する
-                            faceReader = faceSource.OpenReader();
-
-                            // FaceReaderからフレームを受け取ることができるようになった際に発生するイベント
-                            faceReader.FrameArrived += OnFaceFrameArrived;
-                            // FaceFrameSourceが指定されたTrackingIdのトラッキングに失敗した際に発生するイベント
-                            faceSource.TrackingIdLost += OnTrackingIdLost;
+                             // 検出されたBodyに対してFaceTrackingを行うよう、FaceFrameSourceを設定
+                            this.faceSource.TrackingId = target.TrackingId;
                         }
                     }
                 }
@@ -366,9 +365,9 @@ namespace FaceTrackingBasic.Models
             this.MouthMoved = "NONE";
             this.LookingAway = "NONE";
 
-            // faceReaderとfaceSourceを初期化して次のトラッキングに備える(初期化)
-            faceReader = null;
-            faceSource = null;
+            //// faceReaderとfaceSourceを初期化して次のトラッキングに備える(初期化)
+            //this.faceSource.TrackingId = 0;
+            //this.isCaptured = false;
         }
 
         /// <summary>
@@ -381,7 +380,12 @@ namespace FaceTrackingBasic.Models
                 if (faceFrame == null) return;
 
                 // 顔情報に関するフレームを取得
+                if (!faceFrame.IsTrackingIdValid)
+                    return;
+                
                 var result = faceFrame.FaceFrameResult;
+                if (result == null) return;
+
                 // 表情等に関する結果を取得し、プロパティを更新
                 this.Happy = result.FaceProperties[FaceProperty.Happy].ToString();
                 this.FaceEngagement = result.FaceProperties[FaceProperty.Engaged].ToString();

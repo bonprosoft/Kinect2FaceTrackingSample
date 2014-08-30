@@ -10,12 +10,13 @@ using Microsoft.Kinect.Face;
 using HDFace3dTracking.Models;
 using System.Runtime.CompilerServices;
 using System.Windows.Media.Media3D;
+using System.Windows.Media;
 
 namespace HDFace3dTracking.ViewModels
 {
     class MainViewModel : INotifyPropertyChanged
     {
-        private HdFace3dTrackingModel model = new HdFace3dTrackingModel();
+        private HdFaceTrackingModel model = new HdFaceTrackingModel();
 
         public MainViewModel()
         {
@@ -42,6 +43,16 @@ namespace HDFace3dTracking.ViewModels
         public IReadOnlyDictionary<FaceShapeAnimations, float> AnimationUnits
         {
             get { return this.model.AnimationUnits; }
+        }
+
+        public Brush SkinColor
+        {
+            get { return new SolidColorBrush(this.model.SkinColor); }
+        }
+
+        public Brush HairColor
+        {
+            get { return new SolidColorBrush(this.model.HairColor); }
         }
 
         #endregion

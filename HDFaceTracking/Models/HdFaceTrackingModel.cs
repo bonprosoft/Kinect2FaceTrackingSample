@@ -15,7 +15,7 @@ using System.Collections.ObjectModel;
 
 namespace HDFace3dTracking.Models
 {
-    class HdFace3dTrackingModel : INotifyPropertyChanged
+    class HdFaceTrackingModel : INotifyPropertyChanged
     {
 
         #region "変数"
@@ -38,6 +38,8 @@ namespace HDFace3dTracking.Models
         private FaceAlignment faceAlignment = null;
         private FaceModel faceModel = null;
 
+        private FaceModelBuilderAttributes DefaultAttributes = FaceModelBuilderAttributes.SkinColor | FaceModelBuilderAttributes.HairColor;
+
         /// <summary>
         /// 顔情報データの取得元を示します
         /// </summary>
@@ -52,11 +54,6 @@ namespace HDFace3dTracking.Models
         /// 顔情報を使用して3Dモデルを作成するModelBuilderを示します
         /// </summary>
         private FaceModelBuilder faceModelBuilder = null;
-
-        /// <summary>
-        /// FaceModelBuilderの収集が完了しているかを示します(バグ有？)
-        /// </summary>
-        private bool isCaptureCompleted = false;
 
         #endregion
 
@@ -115,6 +112,35 @@ namespace HDFace3dTracking.Models
             }
         }
 
+        private Color _SkinColor;
+        /// <summary>
+        /// 現在のFaceModelのSkinColorを示します
+        /// </summary>
+        public Color SkinColor
+        {
+            get { return this._SkinColor; }
+            set
+            {
+                this._SkinColor = value;
+                OnPropertyChanged();
+            }
+        }
+
+
+        private Color _HairColor;
+        /// <summary>
+        /// 現在のFaceModelのHairColorを示します
+        /// </summary>
+        public Color HairColor
+        {
+            get { return this._HairColor; }
+            set
+            {
+                this._HairColor = value;
+                OnPropertyChanged();
+            }
+        }
+
         #endregion
 
         /// <summary>
@@ -158,6 +184,13 @@ namespace HDFace3dTracking.Models
             // KinectセンサーからBody(骨格情報)とColor(色情報)を取得するFrameReaderを作成
             reader = kinect.OpenMultiSourceFrameReader(FrameSourceTypes.Body);
             reader.MultiSourceFrameArrived += OnMultiSourceFrameArrived;
+
+            // Kinectセンサーから詳細なFaceTrackingを行う、ソースとFrameReaderを宣言
+            this.hdFaceFrameSource = new HighDefinitionFaceFrameSource(this.kinect);
+            this.hdFaceFrameSource.TrackingIdLost += this.OnTrackingIdLost;
+            
+            this.hdFaceFrameReader = this.hdFaceFrameSource.OpenReader();
+            this.hdFaceFrameReader.FrameArrived += this.OnFaceFrameArrived;
 
             this.faceModel = new FaceModel();
             this.faceAlignment = new FaceAlignment();
@@ -247,33 +280,51 @@ namespace HDFace3dTracking.Models
                     bodyFrame.GetAndRefreshBodyData(bodies);
 
                     // FaceTrackingが開始されていないか確認
-                    if (hdFaceFrameSource == null && !this.isCaptureCompleted)
+                    if (!this.hdFaceFrameSource.IsTrackingIdValid)
                     {
                         // トラッキング先の骨格を選択
                         var target = (from body in this.bodies where body.IsTracked select body).FirstOrDefault();
                         if (target != null)
                         {
-                            // 検出されたBodyに対するFaceFrameSourceを作成
-                            hdFaceFrameSource = new HighDefinitionFaceFrameSource(kinect)
+                            // 検出されたBodyに対してFaceTrackingを行うよう、FaceFrameSourceを設定
+                            hdFaceFrameSource.TrackingId = target.TrackingId;
+                            // FaceModelBuilderを初期化
+                            if (this.faceModelBuilder != null)
                             {
-                                TrackingId = target.TrackingId
-                            };
+                                this.faceModelBuilder.Dispose();
+                                this.faceModelBuilder = null;
+                            }
+                            this.faceModelBuilder = this.hdFaceFrameSource.OpenModelBuilder(DefaultAttributes);
+                            // FaceModelBuilderがモデルの構築を完了した時に発生するイベント
+                            this.faceModelBuilder.CollectionCompleted += this.OnModelBuilderCollectionCompleted;
+                            // FaceModelBuilderの状態を報告するイベント
+                            this.faceModelBuilder.CaptureStatusChanged += faceModelBuilder_CaptureStatusChanged;
+                            this.faceModelBuilder.CollectionStatusChanged += faceModelBuilder_CollectionStatusChanged;
 
-                            // Readerを作成する
-                            hdFaceFrameReader = hdFaceFrameSource.OpenReader();
-                            // FaceModelBuilderを作成する
-                            faceModelBuilder = hdFaceFrameSource.OpenModelBuilder();
-
-                            // FaceModelBuilderがモデルの構築を完了した時に発生するイベント(現在発生しない模様？)
-                            faceModelBuilder.CollectionCompleted += OnModelBuilderCollectionCompleted;
-                            // HighDefinitionFrameReaderからフレームを受け取ることができるようになった際に発生するイベント
-                            hdFaceFrameReader.FrameArrived += OnFaceFrameArrived;
-                            // FaceFrameSourceが指定されたTrackingIdのトラッキングに失敗した際に発生するイベント
-                            hdFaceFrameSource.TrackingIdLost += OnTrackingIdLost;
+                            // キャプチャの開始
+                            this.faceModelBuilder.BeginFaceDataCollection();
                         }
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// FaceModelBuilderの収集状況が変更されたときのイベントを処理します
+        /// </summary>
+        private void faceModelBuilder_CollectionStatusChanged(object sender, FaceModelBuilderCollectionStatusChangedEventArgs e)
+        {
+            if (this.faceModelBuilder != null)
+                this.FaceModelBuilderStatus = GetCollectionStatus(((FaceModelBuilder)sender).CollectionStatus);
+        }
+
+        /// <summary>
+        /// FaceModelBuilderの取得状況が変更されたときのイベントを処理します
+        /// </summary>
+        private void faceModelBuilder_CaptureStatusChanged(object sender, FaceModelBuilderCaptureStatusChangedEventArgs e)
+        {
+            if (this.faceModelBuilder != null)
+                this.FaceModelCaptureStatus = ((FaceModelBuilder)sender).CaptureStatus.ToString();
         }
 
         /// <summary>
@@ -282,9 +333,8 @@ namespace HDFace3dTracking.Models
         private void OnTrackingIdLost(object sender, TrackingIdLostEventArgs e)
         {
             // faceReaderとfaceSourceを初期化して次のトラッキングに備える
-            faceModelBuilder = null;
-            hdFaceFrameReader = null;
-            hdFaceFrameSource = null;
+            //this.isCaptured = false;
+            this.hdFaceFrameSource.TrackingId = 0;
         }
 
 
@@ -293,14 +343,19 @@ namespace HDFace3dTracking.Models
         /// </summary>
         private void OnModelBuilderCollectionCompleted(object sender, FaceModelBuilderCollectionCompletedEventArgs e)
         {
-            // 完璧なFaceModelデータが取得可能？
-            this.isCaptureCompleted = true;
-            
             var modelData = e.ModelData;
             this.faceModel = modelData.ProduceFaceModel();
             
             // MeshをUpdate
             UpdateMesh();
+
+            // SkinColorとHairColorの値も更新
+            this.SkinColor = UIntToColor(this.faceModel.SkinColor);
+            this.HairColor = UIntToColor(this.faceModel.HairColor);
+            
+            // 更新を行う
+            this.FaceModelBuilderStatus = GetCollectionStatus(((FaceModelBuilder)sender).CollectionStatus);
+            this.FaceModelCaptureStatus = ((FaceModelBuilder)sender).CaptureStatus.ToString();
 
             this.faceModelBuilder.Dispose();
             this.faceModelBuilder = null;
@@ -311,11 +366,9 @@ namespace HDFace3dTracking.Models
         /// </summary>
         private void OnFaceFrameArrived(object sender, HighDefinitionFaceFrameArrivedEventArgs e)
         {
-            if (isCaptureCompleted) return;
-
             using (var faceFrame = e.FrameReference.AcquireFrame())
             {
-                if (faceFrame == null) return;
+                if (faceFrame == null || !faceFrame.IsFaceTracked) return;
 
                 // FaceAlignmentを更新
                 faceFrame.GetAndRefreshFaceAlignmentResult(this.faceAlignment);
@@ -323,10 +376,6 @@ namespace HDFace3dTracking.Models
 
                 // Animation Unitを更新
                 OnPropertyChanged("AnimationUnits");
-
-                // ModelBuilderの状況もアップデート
-                this.FaceModelBuilderStatus = GetCollectionStatus(this.faceModelBuilder.CollectionStatus);
-                this.FaceModelCaptureStatus = this.faceModelBuilder.CaptureStatus.ToString();
 
             }
         }
@@ -358,7 +407,18 @@ namespace HDFace3dTracking.Models
 
             return string.Join(" / ", msgs);
         }
-    
+
+        /// <summary>
+        /// UIntの値をColorに変換します
+        /// </summary>
+        private Color UIntToColor(uint color)
+        {
+            byte a = (byte)(color >> 24);
+            byte r = (byte)(color >> 16);
+            byte g = (byte)(color >> 8);
+            byte b = (byte)(color >> 0);
+            return Color.FromArgb(a, r, g, b);
+        }
 
         public event PropertyChangedEventHandler PropertyChanged;
 
